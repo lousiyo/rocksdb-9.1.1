@@ -499,6 +499,7 @@ InlineSkipList<Comparator>::FindGreaterOrEqual(const char* key) const {
                   ? 1
                   : compare_(next->Key(), key_decoded);
     if (cmp == 0 || (cmp > 0 && level == 0)) {
+      // We found a matching node
       return next;
     } else if (cmp < 0) {
       // Keep searching in this list
@@ -683,6 +684,15 @@ InlineSkipList<Comparator>::AllocateNode(size_t key_size, int height) {
   // raw + prefix, and holds the bottom-mode (level 0) skip list pointer
   // next_[0].  key_size is the bytes for the key, which comes just after
   // the Node.
+  // prefix 是为我们在 Node 实例之前存储的 height - 1 个指针预留的空间
+  // (next_[-(height - 1) .. -1])。Node 从 raw + prefix 开始，
+  // 并持有底层（level 0）跳表指针 next_[0]。key_size 是键的字节数，
+  // 紧跟在 Node 之后。
+  //这种内存布局设计允许：
+  // 通过负索引访问高层级指针：next_[-(height-1)] 到 next_[-1]
+  // 通过 next_[0] 访问基础层级指针
+  // 键数据紧邻节点数据，提高缓存局部性
+  // 一次性分配连续内存块，减少内存碎片
   char* raw = allocator_->AllocateAligned(prefix + sizeof(Node) + key_size);
   Node* x = reinterpret_cast<Node*>(raw + prefix);
 
@@ -693,6 +703,10 @@ InlineSkipList<Comparator>::AllocateNode(size_t key_size, int height) {
   // however, so that it can perform the proper links.  Since we're not
   // using the pointers at the moment, StashHeight temporarily borrow
   // storage from next_[0] for that purpose.
+  // 一旦我们将节点链接到跳表中，我们实际上不需要知道它的高度，
+  // 因为我们可以隐式地使用我们在级别h遍历到节点的事实来知道h是该节点的有效级别。
+  // 但是，我们需要将高度传递给插入步骤，以便它可以执行适当的链接。
+  // 由于我们目前没有使用指针，StashHeight暂时借用next_[0]的存储空间来实现这个目的
   x->StashHeight(height);
   return x;
 }
