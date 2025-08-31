@@ -1092,8 +1092,26 @@ bool InlineSkipList<Comparator>::SplitInlineSkipList(char* key, InlineSkipList* 
   
   // 找到分割点：最后一个小于key的节点
   Node* split_node = FindLessThan(key);
+  // 如果所有节点都大于等于 key，则 split_node == head_
   if (split_node == nullptr) {
     return false; // 不应该发生
+  }
+  if (split_node == head_) {
+    // 所有节点都大于等于 key，直接将所有节点移动到 new_list
+    int max_height = GetMaxHeight();
+    for (int i = 0; i < max_height; ++i) {
+      Node* move_node = head_->Next(i);
+      head_->SetNext(i, nullptr);
+      new_list->head_->SetNext(i, move_node);
+    }
+    // 更新高度
+    max_height_.store(1, std::memory_order_relaxed);
+    int new_max_height = max_height;
+    while (new_max_height > 1 && new_list->head_->Next(new_max_height - 1) == nullptr) {
+      new_max_height--;
+    }
+    new_list->max_height_.store(new_max_height, std::memory_order_relaxed);
+    return true;
   }
   
   // 获取当前跳表的最大高度
