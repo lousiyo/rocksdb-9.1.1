@@ -143,6 +143,17 @@ class InlineSkipList {
   // Return estimated number of entries smaller than `key`.
   uint64_t EstimateCount(const char* key) const;
 
+  //根据指定的key将当前inlineskiplist拆分
+  //将小于入参key的部分保留在当前结构体中不变
+  //将大于等于入参key的部分移动到新的inlineskiplist中
+  //两个inlineskiplist的比较器必须相同,且使用同一个allocator
+  //new_list指针不能为空,但是里面没有元素
+  //拆分完成后,当前inlineskiplist只保留小于入参key的元素
+  //new_list保留大于等于入参key的元素
+  //不要采用内存拷贝的方式,通过修改指针值实现
+  //返回值表示是否成功拆分
+  bool SplitInlineSkipList(char* key, InlineSkipList* new_list);
+
   // Validate correctness of the skip-list.
   void TEST_Validate() const;
 
@@ -819,6 +830,7 @@ template <class Comparator>
 template <bool UseCAS>
 bool InlineSkipList<Comparator>::Insert(const char* key, Splice* splice,
                                         bool allow_partial_splice_fix) {
+  // - 1 以获得node指针
   Node* x = reinterpret_cast<Node*>(const_cast<char*>(key)) - 1;
   const DecodedKey key_decoded = compare_.decode_key(key);
   int height = x->UnstashHeight();
@@ -1064,6 +1076,76 @@ void InlineSkipList<Comparator>::TEST_Validate() const {
   for (int i = 1; i < max_height; i++) {
     assert(nodes[i] != nullptr && nodes[i]->Next(i) == nullptr);
   }
+}
+
+template <class Comparator>
+bool InlineSkipList<Comparator>::SplitInlineSkipList(char* key, InlineSkipList* new_list) {
+  // 参数验证
+  if (key == nullptr || new_list == nullptr) {
+    return false;
+  }
+  
+  // 检查new_list是否为空
+  if (new_list->head_->Next(0) != nullptr) {
+    return false; // 新跳表不为空
+  }
+  
+  // 找到分割点：最后一个小于key的节点
+  Node* split_node = FindLessThan(key);
+  if (split_node == nullptr) {
+    return false; // 不应该发生
+  }
+  
+  // 获取当前跳表的最大高度
+  int max_height = GetMaxHeight();
+  
+  // 用于存储新跳表的每一层的第一个节点
+  Node* first_nodes[kMaxPossibleHeight];
+  
+  // 拆分过程：
+  // 1. 对每一层，保存split_node的下一个节点指针
+  // 2. 将split_node的next指针设置为nullptr，断开连接
+  for (int i = 0; i < max_height; ++i) {
+    first_nodes[i] = split_node->Next(i);
+    split_node->SetNext(i, nullptr);
+  }
+  
+  // 处理没有大于等于key的节点的情况
+  if (first_nodes[0] == nullptr) {
+    // 更新当前跳表的最大高度
+    int current_new_max_height = max_height;
+    while (current_new_max_height > 1 && head_->Next(current_new_max_height - 1) == nullptr) {
+      current_new_max_height--;
+    }
+    max_height_.store(current_new_max_height, std::memory_order_relaxed);
+    return true;
+  }
+  
+  // 确定新跳表的最大高度
+  int new_max_height = 0;
+  while (new_max_height < max_height && first_nodes[new_max_height] != nullptr) {
+    new_max_height++;
+  }
+  
+  // 将大于等于key的部分连接到新跳表
+  for (int i = 0; i < new_max_height; ++i) {
+    if (first_nodes[i] != nullptr) {
+      new_list->head_->SetNext(i, first_nodes[i]);
+    }
+  }
+  
+  // 更新两个跳表的最大高度
+  // 对于当前跳表，最大高度可能需要降低
+  int current_new_max_height = max_height;
+  while (current_new_max_height > 1 && head_->Next(current_new_max_height - 1) == nullptr) {
+    current_new_max_height--;
+  }
+  max_height_.store(current_new_max_height, std::memory_order_relaxed);
+  
+  // 对于新跳表，设置其最大高度
+  new_list->max_height_.store(new_max_height, std::memory_order_relaxed);
+  
+  return true;
 }
 
 }  // namespace ROCKSDB_NAMESPACE
