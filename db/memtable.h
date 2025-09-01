@@ -155,7 +155,7 @@ class MemTable {
   size_t MemoryAllocatedBytes() const {
     return table_->ApproximateMemoryUsage() +
            range_del_table_->ApproximateMemoryUsage() +
-           arena_.MemoryAllocatedBytes();
+           arena_->MemoryAllocatedBytes();
   }
 
   // Returns a vector of unique random memtable entries of size 'sample_size'.
@@ -576,7 +576,8 @@ class MemTable {
   int refs_;
   const size_t kArenaBlockSize;
   AllocTracker mem_tracker_;
-  ConcurrentArena arena_;
+  //修改为shared_ptr，以能够支持两个immutable memtable共享同一个arena_，供memtable拆分使用
+  std::shared_ptr<ConcurrentArena> arena_;
   std::unique_ptr<MemTableRep> table_;
   std::unique_ptr<MemTableRep> range_del_table_;
   std::atomic_bool is_range_del_table_empty_;

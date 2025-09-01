@@ -80,18 +80,18 @@ MemTable::MemTable(const InternalKeyComparator& cmp,
       refs_(0),
       kArenaBlockSize(Arena::OptimizeBlockSize(moptions_.arena_block_size)),
       mem_tracker_(write_buffer_manager),
-      arena_(moptions_.arena_block_size,
+      arena_(std::make_shared<ConcurrentArena>(moptions_.arena_block_size,
              (write_buffer_manager != nullptr &&
               (write_buffer_manager->enabled() ||
                write_buffer_manager->cost_to_cache()))
                  ? &mem_tracker_
                  : nullptr,
-             mutable_cf_options.memtable_huge_page_size),
+             mutable_cf_options.memtable_huge_page_size)),
       table_(ioptions.memtable_factory->CreateMemTableRep(
-          comparator_, &arena_, mutable_cf_options.prefix_extractor.get(),
+          comparator_, arena_.get(), mutable_cf_options.prefix_extractor.get(),
           ioptions.logger, column_family_id)),
       range_del_table_(SkipListFactory().CreateMemTableRep(
-          comparator_, &arena_, nullptr /* transform */, ioptions.logger,
+          comparator_, arena_.get(), nullptr /* transform */, ioptions.logger,
           column_family_id)),
       is_range_del_table_empty_(true),
       data_size_(0),
@@ -128,7 +128,7 @@ MemTable::MemTable(const InternalKeyComparator& cmp,
   if ((prefix_extractor_ || moptions_.memtable_whole_key_filtering) &&
       moptions_.memtable_prefix_bloom_bits > 0) {
     bloom_filter_.reset(
-        new DynamicBloom(&arena_, moptions_.memtable_prefix_bloom_bits,
+        new DynamicBloom(arena_.get(), moptions_.memtable_prefix_bloom_bits,
                          6 /* hard coded 6 probes */,
                          moptions_.memtable_huge_page_size, ioptions.logger));
   }
@@ -161,7 +161,7 @@ MemTable::~MemTable() {
 
 size_t MemTable::ApproximateMemoryUsage() {
   autovector<size_t> usages = {
-      arena_.ApproximateMemoryUsage(), table_->ApproximateMemoryUsage(),
+      arena_->ApproximateMemoryUsage(), table_->ApproximateMemoryUsage(),
       range_del_table_->ApproximateMemoryUsage(),
       ROCKSDB_NAMESPACE::ApproximateMemoryUsage(insert_hints_)};
   size_t total_usage = 0;
@@ -200,7 +200,7 @@ bool MemTable::ShouldFlushNow() {
   // shouldn't flush.
   auto allocated_memory = table_->ApproximateMemoryUsage() +
                           range_del_table_->ApproximateMemoryUsage() +
-                          arena_.MemoryAllocatedBytes();
+                          arena_->MemoryAllocatedBytes();
 
   approximate_memory_usage_.store(allocated_memory, std::memory_order_relaxed);
 
@@ -243,7 +243,7 @@ bool MemTable::ShouldFlushNow() {
   // NOTE: the average percentage of waste space of this approach can be counted
   // as: "arena block size * 0.25 / write buffer size". User who specify a small
   // write buffer size and/or big arena block size may suffer.
-  return arena_.AllocatedAndUnused() < kArenaBlockSize / 4;
+  return arena_->AllocatedAndUnused() < kArenaBlockSize / 4;
 }
 
 void MemTable::UpdateFlushState() {

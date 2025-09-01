@@ -32,6 +32,23 @@ namespace ROCKSDB_NAMESPACE {
 
 class Logger;
 
+/**
+ * Allocator
+ * 抽象基类，定义了内存分配接口（如 Allocate、AllocateAligned），不关心具体实现和线程安全。
+
+ * Arena
+ * 继承自 Allocator，实现了高效的顺序内存分配，适合单线程或低并发场景。负责实际的内存块管理和分配逻辑。
+
+ * ConcurrentArena
+ * 继承自 Allocator，内部组合（包含）一个 Arena 实例。扩展了线程安全和多核分片缓存功能，适合高并发场景。所有分配最终都委托给 Arena 完成。
+
+ *Arena 和 ConcurrentArena 都实现了 Allocator 的接口。
+ * ConcurrentArena 内部实际使用 Arena 进行内存分配。
+
+ * Arena 只适合单线程，ConcurrentArena 适合多线程。
+ * ConcurrentArena 增加了分片缓存和锁机制，减少多线程争用，提高分配效率。
+ */
+
 // ConcurrentArena wraps an Arena.  It makes it thread safe using a fast
 // inlined spinlock, and adds small per-core allocation caches to avoid
 // contention for small allocations.  To avoid any memory waste from the
@@ -124,6 +141,28 @@ class ConcurrentArena : public Allocator {
     }
     return total;
   }
+
+  /**
+   * 分配策略决策：
+   *
+   * 如果分配大小超过分片块大小的1/4，或者强制使用arena，或者当前线程尚未初始化分片缓存，则直接使用主arena分配
+   * 否则使用每核心分片缓存进行分配
+
+   * 线程安全处理：
+   * 使用自旋锁（SpinMutex）保护关键区域
+   * 采用try_lock机制避免线程阻塞
+   * 如果当前分片被占用，通过Repick()选择其他可用分片
+
+   * 内存管理优化：
+   * 每核心分片维护自己的空闲内存指针和已分配统计
+   * 当分片内存不足时，从主arena申请新的内存块
+   * 支持对齐和非对齐分配
+
+   * 性能优化：
+   * 延迟初始化分片，避免不必要的内存浪费
+   * 动态调整分片块大小以适应实际使用模式
+   * 使用Fixup()方法同步主arena和分片的统计信息
+   */
 
   template <typename Func>
   char* AllocateImpl(size_t bytes, bool force_arena, const Func& func) {
